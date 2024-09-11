@@ -27,7 +27,7 @@
 
 %%MANUSCRIPT
 \title{Eyre HTTP Caching}
-\author{\patp{palfun-foslup}, \\ Ted Blackman~\patp{rovyns-ricfer}, \\ Joe Bryan~\patp{master-morzod} \\ Tlon Corporation, Urbit Foundation, Urbit Foundation}
+\author{Mark Staarink~\patp{palfun-foslup}, \\ Ted Blackman~\patp{rovyns-ricfer}, \\ Joe Bryan~\patp{master-morzod} \\ Tlon Corporation, Urbit Foundation, Urbit Foundation}
 \date{}
 
 \begin{document}
@@ -45,7 +45,7 @@
 
 \tableofcontents
 
-\section[Eyre \textsc{http} Caching]{Eyre HTTP Caching}
+\section[Improving Eyre \textsc{http} Caching]{Improving Eyre HTTP Caching}
 
 \noindent\sloppy
 \emph{This proposal for Eyre's \textsc{http} caching mechanism was released by \patp{palfun-foslup} on \texttt{\textasciitilde 2022.8.15} and revised through \texttt{\textasciitilde 2022.8.16}.}
@@ -73,7 +73,7 @@ Before talking about the publication cache proper, we must be aware of what kind
 
 \begin{enumerate}
   \item  {\bf Static content} is fully self-contained and only changes when the data within changes; for example: a blog post without comments, or an image.
-  \item  {\bf Dynamic content} changes based on the current state of an agent (or some other datum); for example: a blog post \emph{with} comments or a list of \lstinline[style=inlinecode]{%pals}.
+  \item  {\bf Dynamic content} changes based on the current state of an agent (or some other datum); for example: a blog post \emph{with} comments or a list of pals.
   \item  {\bf Procedural content} is generated from the request itself. While the response for any given path may be known ahead of time, it may not be possible to enumerate all the valid paths for which we have responses; for example: a parameterized \lstinline[style=inlinecode]{/sigil.svg} endpoint, or a calculator \textsc{api}.
 \end{enumerate}
 
@@ -123,15 +123,15 @@ Accounting for the fact that agent-driven responses are already common, and weig
 
 This is sufficient to let agents publish responses into the cache, and keep those updated as the underlying data changes.
 
-The ``static file from Clay'' case can be implemented using the affordances here. To avoid repetition of boilerplate patterns regarding this, we might ship a small piece of userspace infrastructure, an `/app/file-server` if you will, that is responsible for bindings of this kind.
+The ``static file from Clay'' case can be implemented using the affordances here. To avoid repetition of boilerplate patterns regarding this, we might ship a small piece of userspace infrastructure, an \lstinline[style=inlinecode]{/app/file-server} if you will, that is responsible for bindings of this kind.
 
 \subsubsection{Authentication}
 
 The above does not account for authentication, limiting cached responses to fully public content. Presently, we do not have the affordances needed to handle private content properly.
 
-But it doesn't have to be that way. The `%save` task could simply include an `auth=?` flag alongside the `data`, indicating whether authentication is required or not. The runtime would then, where needed, check the incoming request for a valid authentication cookie, and either give the response or serve a simple 403.
+But it doesn't have to be that way. The \lstinline[style=inlinecode]{%save} task could simply include an \lstinline[style=inlinecode]{auth=?} flag alongside the \lstinline[style=inlinecode]{data}, indicating whether authentication is required or not. The runtime would then, where needed, check the incoming request for a valid authentication cookie, and either give the response or serve a simple 403.
 
-...Except the runtime does not presently know how to check an incoming request for authentication. And making it do so is outside the scope of the grant. The changes here aren't too big though, and in some ways similar to the behavior outlined above. (Most likely, just Eyre telling the runtime about creation/expiry of session identifiers, and teaching the runtime how to check for its presence in any `Cookie` headers.) Considering the very-nice-to-have nature of support for private endpoints, we (read: ~palfun-foslup) may offer to implement this in the short-term, so that the grant work may make use of it.
+\ldots{} except that the runtime does not presently know how to check an incoming request for authentication. And making it do so is outside the scope of the grant. The changes here aren't too big though, and in some ways similar to the behavior outlined above. (Most likely, just Eyre telling the runtime about creation/expiry of session identifiers, and teaching the runtime how to check for its presence in any \lstinline[style=inlinecode]{Cookie} headers.) Considering the very-nice-to-have nature of support for private endpoints, we (read: \patp{palfun-foslup}) may offer to implement this in the short-term, so that the grant work may make use of it.
 
 Caching may not seem as relevant for private content, since it's significantly less likely to get requested many times a minute. But being able to eagerly cache there still provides tangible benefits. Urbit-generated web UIs can get served faster, and private endpoints stop being surface area for DOS attacks.
 
@@ -166,7 +166,7 @@ However, an important caveat holds at this point in the discussion:  how procedu
 \section{Further Thoughts}
 
 \noindent\sloppy
-\emph{This appendix is a response by \patp{rovyns-ricfer} and \patp{master-morzod} on \texttt{\textasciitilde 2022.8.16}.  It particularly emphasizes the role that the bound scry namespace and remote scry play in Urbit's prioritization of referential transparency.}
+\emph{This document is an alternative proposal by \patp{rovyns-ricfer} and \patp{master-morzod} on \texttt{\textasciitilde 2022.8.16}.  It particularly emphasizes the role that the bound scry namespace and remote scry play in Urbit's prioritization of referential transparency.}
 
 This represents a vision for how \textsc{http} handling in Urbit could work in the long-run:
 
