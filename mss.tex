@@ -22,11 +22,11 @@
 %  Arrange subsequent pages:
 \fancyhf{}
 \fancyhead[LE]{{\urbitfont Urbit Systems Technical Journal}}
-\fancyhead[RO]{Eyre Caching}
+\fancyhead[RO]{Eyre \textsc{http} Caching}
 \fancyfoot[LE,RO]{\thepage}
 
 %%MANUSCRIPT
-\title{Eyre \textsc{http} Caching}
+\title{Eyre HTTP Caching}
 \author{\patp{palfun-foslup}, \\ Ted Blackman~\patp{rovyns-ricfer}, \\ Joe Bryan~\patp{master-morzod} \\ Tlon Corporation, Urbit Foundation, Urbit Foundation}
 \date{}
 
@@ -73,7 +73,7 @@ Before talking about the publication cache proper, we must be aware of what kind
 
 \begin{enumerate}
   \item  {\bf Static content} is fully self-contained and only changes when the data within changes; for example: a blog post without comments, or an image.
-  \item  {\bf Dynamic content} changes based on the current state of an agent (or some other datum); for example: a blog post *with* comments or a list of \lstinline[style=inlinecode]{%pals}.
+  \item  {\bf Dynamic content} changes based on the current state of an agent (or some other datum); for example: a blog post \emph{with} comments or a list of \lstinline[style=inlinecode]{%pals}.
   \item  {\bf Procedural content} is generated from the request itself. While the response for any given path may be known ahead of time, it may not be possible to enumerate all the valid paths for which we have responses; for example: a parameterized \lstinline[style=inlinecode]{/sigil.svg} endpoint, or a calculator \textsc{api}.
 \end{enumerate}
 
