@@ -4,9 +4,8 @@
 
 \addbibresource{mss.bib}
 
-\newcommand{\authorname}{Ernest P. Worrell}
-\newcommand{\authorpatp}{\patp{sampel-palnet}}
-\newcommand{\affiliation}{Kamp Kikakee}
+\newcommand{\authorpatp}{\patp{palfun-foslup}}
+\newcommand{\affiliation}{Tlon Corporation}
 
 %  Make first page footer:
 \fancypagestyle{firststyle}{%
@@ -23,12 +22,12 @@
 %  Arrange subsequent pages:
 \fancyhf{}
 \fancyhead[LE]{{\urbitfont Urbit Systems Technical Journal}}
-\fancyhead[RO]{Floating-Point Arithmetic on Deterministic Systems}
+\fancyhead[RO]{Eyre Caching}
 \fancyfoot[LE,RO]{\thepage}
 
 %%MANUSCRIPT
-\title{Ernest Goes to Mars:  An Enquiry into the Foundations of Artificial Stupidity}
-\author{\authorname~\authorpatp \\ \affiliation}
+\title{Eyre \textsc{http} Caching}
+\author{\patp{palfun-foslup}, \\ Ted Blackman~\patp{rovyns-ricfer}, \\ Joe Bryan~\patp{master-morzod} \\ Tlon Corporation, Urbit Foundation, Urbit Foundation}
 \date{}
 
 \begin{document}
@@ -37,7 +36,7 @@
 \thispagestyle{firststyle}
 
 \begin{abstract}
-In this groundbreaking paper, we embark on a cosmic journey with the renowned character Ernest P. Worrell as he ventures into the unexplored realm of Martian computing. Drawing inspiration from Ernest's comically ingenious encounters with everyday challenges, we investigate the foundations of what we term "Artificial Stupidity." As Ernest grapples with Martian technology, we delve into the intricacies of programming errors, algorithmic missteps, and the curious phenomena that arise when human-like intelligence meets extraterrestrial computing systems. Our analysis sheds light on the unexpected intersections between humor, artificial intelligence, and the cosmic absurdity of Martian software. Join us in this interplanetary exploration as we unravel the mysteries of Artificial Stupidity through the lens of Ernest's interstellar escapades.
+  Eyre is the server vane for the Urbit OS, and is responsible for handling all \textsc{http} requests.  Eyre supports caching responses to \texttt{GET} requests, which can improve performance by reducing the number of times that the server must generate a response from scratch.  This historical report and response were published as advisory gists on GitHub, and encapsulate design decisions that have gone into modifying and improving Eyre's caching performance.
 \end{abstract}
 
 % We will adjust page numbering in final editing.
@@ -46,72 +45,172 @@ In this groundbreaking paper, we embark on a cosmic journey with the renowned ch
 
 \tableofcontents
 
-\section{Introduction}
+\section{Eyre \textsc{http} Caching}
 
-Introduce the scope of your article and investigation.
+\noindent\sloppy
+\emph{This proposal for Eyre's \textsc{http} caching mechanism was released by \patp{palfun-foslup} on \texttt{\textasciitilde 2022.8.15} and revised through \texttt{\textasciitilde 2022.8.16}.}
 
-\section{Background and Literature}
+\subsection{Introduction}
 
-Exposite the relevant background and literature.
+Urbit's primary role is to function as a webserver, but it is not as fast at that operation as it could be.  It would be good if Urbit could comfortably serve hundreds or even thousands of pageviews per minute.  (Benchmarks for the status quo are left as an exercise to the reader.)
+
+\subsection{Approaches to Improving Performance}
+
+There are two primary ways in which the scry namespace can be utilized to make Eyre more performant:\footnote{Truthfully, there are probably more than two ways, but these specific two have highest relevance in Eyre's recent history.}
 
 \begin{enumerate}
-  \item  Prefer to \texttt{enumerate}.
-  \item  It is easier to refer to than \texttt{itemize}.
+  \item  {\bf Publication cache}: Eyre can track a publication cache with static, known-ahead-of-time responses bound to specific endpoint paths. Eyre would tell the runtime about these known responses, which the runtime would use to serve up responses to \texttt{GET} requests.
+  \item  {\bf Stateless reads}: The runtime, when receiving a \texttt{GET} request, can scry into Eyre to retrieve a response for it. Eyre might scry into agents to further resolve the read. This way, with \texttt{GET} requests handled as pure reads, they could theoretically be served in parallel.
 \end{enumerate}
 
-\noindent
-Mark \texttt{\textbackslash noindent} in paragraphs that continue the thought of an \texttt{\textbackslash enumerate} block.
+This document focuses on the publication cache. The latter will not deliver performance gains by itself, may actually incur a performance hit in the ``scry miss'' case, and has unanswered questions around referential transparency. Some prior art can be found in an old draft PR (\citetpr{urbit_urbit_4674}).
 
-\section{Urbit's Implementation}
+The publication cache also aligns closely with the imagined future of ``solid state subscriptions'' and the ``shrub namespace'', wherein new or changed data is explicitly published into the namespace.
 
-Oftentimes you will then turn to exploring how Urbit or closely related systems like Nockchain have approached or considered a problem.  You can look at a PR like \citetpr{urbit_urbit_6891}.
+\subsection{Kinds of Content}
 
-\lstset{language=C}
-\begin{lstlisting}
-#include <stdio.h>
+Before talking about the publication cache proper, we must be aware of what kinds of content may get served through Eyre. We identify three kinds:
 
-double compute(float a, float b) {
-    return a * a + b * b;
-}
+\begin{enumerate}
+  \item  {\bf Static content} is fully self-contained and only changes when the data within changes; for example: a blog post without comments, or an image.
+  \item  {\bf Dynamic content} changes based on the current state of an agent (or some other datum); for example: a blog post *with* comments or a list of \lstinline[style=inlinecode]{%pals}.
+  \item  {\bf Procedural content} is generated from the request itself. While the response for any given path may be known ahead of time, it may not be possible to enumerate all the valid paths for which we have responses; for example: a parameterized \lstinline[style=inlinecode]{/sigil.svg} endpoint, or a calculator \textsc{api}.
+\end{enumerate}
 
-int main() {
-    float x = 2.5;
-    float y = 3.7;
+Note that for dynamic and procedural content, it may not always be possible to publish a known response at all. If the response depends on the timestamp of the request in some way, a cache entry would be busted before it even got stored. We simply ignore this case.
 
-    double result = compute(x, y);
+\subsection{Sources of Content}
 
-    printf("Result: %lf\n", result);
+Briefly, take note that for both dynamic and procedural content, Hoon code \emph{must} be executed to generate the (original) response. Most commonly, this takes the form of a Gall userspace agent. In rare cases, generators serve this function.
 
-    return 0;
-}
+For static content (only) can we consider another source: Clay, the file system vane. For things that are already files, it makes sense to stick these in Clay. (Think JavaScript blobs, image files, and other ``earth'' content.)  For data that originates within agents, however, in most cases it is unergonomic and unsound to store that data in Clay, especially if the agent may want to refer back to the data later.
+
+In practice, both the ``dynamic/prodecural response from agent'' and ``static file from Clay'' cases are common, though the latter is often handled through Docket's ``glob'' system instead (for, at this point, largely historical reasons).
+
+\subsection{Static Publication Cache}
+
+Accounting for the fact that agent-driven responses are already common, and weighing the fact that Eyre does not currently have any connection to or dependency on Clay, we propose the following model for a publication cache in Eyre:
+
+\begin{lstlisting}[style=listingcode]
++$  task
+  $%  to-cache
+      etc...
+  ==
+::
++$  gift
+  $%  to-cache
+      etc...
+  ==
+::
++$  to-cache
+  $%  [%save endpoint data=simple-payload:http]
+      [%dump endpoint]
+  ==
+::
++$  endpoint  ::  exact binding
+  $:  binding
+      tail=(unit @t)
+  ==
 \end{lstlisting}
 
-\noindent
-That code snippet was part of the text, and not a standalone entity to which we make separate repeated reference.
+\begin{enumerate}
+  \item  Eyre gets a new task and gift, \lstinline[style=inlinecode]{%save}, which can be used to publish responses for a specific endpoint (optional site, plus path, plus extension if any) into the cache.
+  \item  Eyre stores the cache within itself. Whenever something gets added, it notifies the runtime. On-\lstinline[style=inlinecode]{%born}, it notifies the runtime of all existing entries.
+  \item  The runtime tracks the cache as per Eyre's notifications. Whenever it receives a \texttt{GET} request, and an entry for that exact path exists in the cache, it serves the stored response instead of injecting the request as an event.
+  \item  \lstinline[style=inlinecode]{%save} may be used to overwrite existing entries. \lstinline[style=inlinecode]{%dump} may be used to remove existing entries.
+  \item  When resolving an incoming \texttt{GET} request, Eyre checks the cache for an exact match. If there is, it serves that. If there is none, it falls back to the regular binding matching that path, if any.
+\end{enumerate}
 
-\begin{figure}
-  \begin{lstlisting}[language=Python, caption={Example Python Code}, label={lst:example}]
-  def hello_world():
-      print("Hello, world!")
-  \end{lstlisting}
-\end{figure}
+This is sufficient to let agents publish responses into the cache, and keep those updated as the underlying data changes.
 
-Refer to the code listing: Listing~\ref{lst:example}.  (Note that we don't suppress indentation since it's a float.)
+The ``static file from Clay'' case can be implemented using the affordances here. To avoid repetition of boilerplate patterns regarding this, we might ship a small piece of userspace infrastructure, an `/app/file-server` if you will, that is responsible for bindings of this kind.
 
+\subsubsection{Authentication}
 
-\section{A Wild Ernest Appears}
+The above does not account for authentication, limiting cached responses to fully public content. Presently, we do not have the affordances needed to handle private content properly.
 
-You can have as many sections as make sense.  Only sections and subsections appear in the table of contents.
+But it doesn't have to be that way. The `%save` task could simply include an `auth=?` flag alongside the `data`, indicating whether authentication is required or not. The runtime would then, where needed, check the incoming request for a valid authentication cookie, and either give the response or serve a simple 403.
 
-\section{Conclusion}
+...Except the runtime does not presently know how to check an incoming request for authentication. And making it do so is outside the scope of the grant. The changes here aren't too big though, and in some ways similar to the behavior outlined above. (Most likely, just Eyre telling the runtime about creation/expiry of session identifiers, and teaching the runtime how to check for its presence in any `Cookie` headers.) Considering the very-nice-to-have nature of support for private endpoints, we (read: ~palfun-foslup) may offer to implement this in the short-term, so that the grant work may make use of it.
 
-To summarize, why did you write it?  Why do we care?  What impact should it have on Urbit development?
+Caching may not seem as relevant for private content, since it's significantly less likely to get requested many times a minute. But being able to eagerly cache there still provides tangible benefits. Urbit-generated web UIs can get served faster, and private endpoints stop being surface area for DOS attacks.
 
-Your bibliography is a separate BibTeX file.  We use the \texttt{plainnat} bibliography style.  You can use \texttt{natbib} citation commands like \texttt{\textbackslash citep\{wikipedia\}} for parenthesized references.  Use \texttt{\textbackslash citet\{wikipedia\}} for inline references.  You can also use \texttt{\textbackslash citeauthor\{wikipedia\}} for the principal author's name.
+\subsection{Procedural Publication Cache}
 
-``You can use traditional TeX---or LaTeX---representations'' \citep{Varney1987}.
+At this point, we have accounted for serving static and dynamic content from Eyre, but are not yet able to serve procedural content. This requires a slightly different approach.\footnote{The approach outlined in this subsection is still tentative and under discussion, pending solid state subscriptions becoming more ``real''. Certainly the static publication cache above should be sufficient for most cases.}
 
-“Or you can use fancy quotes—and symbols.”
+\begin{lstlisting}[style=listingcode]
++$  to-cache
+  $%  [%prep =binding =work]
+      [%drop =binding]
+      etc...
+  ==
+::
++$  work  $-(inbound-request simple-payload:http)
+::
++$  action
+  $%  [%work work]
+      etc...
+  ==
+\end{lstlisting}
 
+\begin{enumerate}
+  \item  Eyre gets a new task and gift, \lstinline[style=inlinecode]{%prep}, which can be used to publish a response generation function for a specific binding (optional site, plus top-level path) into the cache.
+  \item  In addition to a cache entry, Eyre stores this among the normal bindings. Whenever a \lstinline[style=inlinecode]{%work} binding gets added, Eyre notifies the runtime.
+  \item  The runtime tracks the cache as per Eyre's notifications. Whenever it receives a \texttt{GET} request, it checks to see if a \lstinline[style=inlinecode]{%prep} binding matches. If one does, it runs the gate and serves the generated response, instead of injecting the request as an event.
+  \item  When resolving an incoming \texttt{GET} request, Eyre resolves from the bindings as normal.
+\end{enumerate}
+
+However, an important caveat holds at this point in the discussion:  how procedural content forces one to bind on non-exact paths, in turn forcing the runtime to bind resolution.  We could reduce the friction here by moving Eyre's funtion to find the binding for a given request path into \texttt{/sys/lull} or the ivory pill.  Alternatively, Eyre just publishes one overarching cache resolution function to the runtime, instead of letting it implement its own logic.  Concern with any of these is keeping old copies of the kernel around within these functions. Eyre could re-publish the function(s) on-upgrade, but might also need agents to do the same.
+
+\section{Further Thoughts}
+
+\noindent\sloppy
+\emph{This appendix is a response by \patp{rovyns-ricfer} and \patp{master-morzod} on \texttt{\textasciitilde 2022.8.16}.  It particularly emphasizes the role that the bound scry namespace and remote scry play in Urbit's prioritization of referential transparency.}
+
+This represents a vision for how \textsc{http} handling in Urbit could work in the long-run:
+
+\begin{enumerate}
+  \item  First check if the \textsc{url} is immutable, mapped to a fully qualified scry path.
+  \item  Then check if the \textsc{url} is in a mapping from mutable \textsc{url} to runtime cache value, which is either:
+  \begin{enumerate}
+    \item  an \textsc{http} 307 temporary redirect to a fully qualified scry path, or
+    \item  a direct \textsc{http} response value
+  \end{enumerate}
+  \item  If neither of these, then inject the request into Arvo as an event.
+\end{enumerate}
+
+Most read requests should use the namespace rather than directly cached values.  This promotes having as much of the system as possible built on referential transparency, which facilitates scaling.  However, if a request would be better served without an \textsc{http} redirect (such as a request for a top-level webpage where the \textsc{url} should not include a revision number or other scry-related details), then an application can ask Eyre to serve the response directly (and the runtime can cache this value, as long as it invalidates it properly when it changes).
+
+If we want Eyre to serve a login page without external dependencies, for example, it should use the mapping from mutable \textsc{url} to direct value – but if it's fine to put it in Clay, then it can redirect to the namespace.
+
+In the future, we'll want to allow the runtime to handle authentication with minimal Arvo activation.  This would prevent unnecessary events being enqueued – which could be used for denial of service attacks – and it also could be used to enable access to private scryable data.  A user could authenticate and retrieve a (potentially mutable) piece of scryable data without activating Arvo, or only activating it to validate an authentication token.
+
+Given this context, the mutable mapping we're trying to implement in this PR could be thought of as a subset of the second check here, namely mutable values that map directly to \textsc{http} response values stored in Eyre and cached in the runtime.
+
+Alternatively, we could treat this as the other version of the second check, involving a redirect: Eyre could maintain a referentially transparent mapping from mutable \textsc{url} to scry path, and the runtime could mirror this mapping and also have a scry cache that it uses to serve \textsc{http} scry requests after the redirects.
+
+There are multiple considerations pointing us toward using direct \textsc{http} responses for now:
+
+\begin{enumerate}
+  \item  The ergonomics of Clay:
+  \begin{enumerate}
+    \item  We need a separate desk full of marks for all served files.
+    \item  We need mark conversions from all filetypes to \textsc{http} response.
+    \item  We need to name each desk, with ad-hoc namespacing.
+    \item  We need to establish tombstoning policies (``norms'').
+  \end{enumerate}
+  \item  Limitations on the namespace for Gall agents:
+  \begin{enumerate}
+    \item  Only scry at current date.
+    \item  No solid-state publications yet.
+    \item  Lack of permissioning.
+  \end{enumerate}
+  \item  Desire to have full control over the \textsc{url} shown to a user in a browser.
+\end{enumerate}
+
+Given all of these concerns, Eyre development should prioritize implementing direct responses first and the subsequent pieces at a later time.\tombstone{}
+
+\selectlanguage{USenglish}
 \printbibliography
 \end{document}
